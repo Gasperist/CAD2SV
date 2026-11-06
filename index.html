@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAD2SV</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">CAD2SV <span>Plan nachzeichnen, in Soundvision importieren</span></div>
+  <input id="projectName" class="project-name" value="Venue" aria-label="Projektname" spellcheck="false">
+  <div class="spacer"></div>
+  <button id="btnPdf">PDF importieren</button>
+  <button id="btnOpen">Projekt öffnen</button>
+  <button id="btnSave">Projekt speichern</button>
+  <button id="btnNew" class="quiet">Neu</button>
+  <button id="btnExport" class="primary">Für Soundvision exportieren</button>
+  <input id="filePdf" type="file" accept="application/pdf,.pdf" hidden>
+  <input id="fileProject" type="file" accept=".json,.cad2sv" hidden>
+</header>
+
+<div class="workspace">
+  <nav class="tools" aria-label="Werkzeuge">
+    <button data-tool="select" title="Auswählen und verschieben (V)"><svg viewBox="0 0 24 24"><path d="M6 3l12 10-5.5 1 3 6-2.5 1-3-6L6 19z"/></svg><span>Auswahl</span></button>
+    <div class="sep">Zeichnen</div>
+    <button data-tool="rect" title="Rechteck: zwei Ecken klicken (R)"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" class="o"/></svg><span>Rechteck</span></button>
+    <button data-tool="rrect" title="Schräges Rechteck: Kante, dann Breite (T)"><svg viewBox="0 0 24 24"><path d="M8 3l13 7-5 9-13-7z" class="o"/></svg><span>Schräg</span></button>
+    <button data-tool="poly" title="Polygon: Punkte klicken, Enter schließt (P)"><svg viewBox="0 0 24 24"><path d="M4 9l8-6 8 7-3 10H8z" class="o"/></svg><span>Polygon</span></button>
+    <button data-tool="circle" title="Kreis: Mittelpunkt, dann Radius (C)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" class="o"/></svg><span>Kreis</span></button>
+    <button data-tool="ring" title="Bogen: Mitte, Anfang, Ende, Innenradius (A)"><svg viewBox="0 0 24 24"><path d="M3 15a9.500 9.500 0 0 1 18 0l-5 1.500a4.500 4.500 0 0 0-8 0z" class="o"/></svg><span>Bogen</span></button>
+    <div class="sep">Plan</div>
+    <button data-tool="scale" title="Skalieren: Strecke klicken, Länge eingeben (K)"><svg viewBox="0 0 24 24"><path d="M3 16l13-13 5 5L8 21z" class="o"/><path d="M8 11l2 2M11 8l2 2M14 5l2 2" class="o"/></svg><span>Skalieren</span></button>
+    <button data-tool="origin" title="Nullpunkt setzen (N)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.500" class="o"/><path d="M12 2v20M2 12h20" class="o"/></svg><span>Nullpunkt</span></button>
+    <button data-tool="align" title="X-Achse am Plan ausrichten: zwei Punkte klicken (L)"><svg viewBox="0 0 24 24"><path d="M3 20L20 5M20 5h-6M20 5v6" class="o"/></svg><span>Ausrichten</span></button>
+    <button data-tool="measure" title="Messen (M)"><svg viewBox="0 0 24 24"><path d="M3 12h18M3 8v8M21 8v8" class="o"/></svg><span>Messen</span></button>
+  </nav>
+
+  <main class="stage">
+    <div class="viewbar">
+      <div class="tabs" role="tablist">
+        <button data-view="top" title="Taste 1">Draufsicht <em>X / Y</em></button>
+        <button data-view="side" title="Taste 2">Seite <em>X / Z</em></button>
+        <button data-view="front" title="Taste 3">Front <em>Y / Z</em></button>
+        <button data-view="iso" title="Taste 4">3D</button>
+      </div>
+      <label class="field" id="planeField"><span id="planeLabel">Zeichenhöhe Z</span><input id="planeValue" value="0" inputmode="decimal"><i>m</i></label>
+      <div class="spacer"></div>
+      <label class="check" title="An Planlinien, Eckpunkte und den Nullpunkt fangen (S)"><input type="checkbox" id="optSnap" checked>Fangen</label>
+      <label class="check" title="Zusätzlich auf das Raster fangen (G)"><input type="checkbox" id="optGridSnap">Raster 0,5 m</label>
+      <button id="btnFit" class="quiet" title="Alles einpassen (F)">Einpassen</button>
+      <button id="btnUndo" class="quiet" title="Rückgängig (⌘Z)" aria-label="Rückgängig">↶</button>
+      <button id="btnRedo" class="quiet" title="Wiederholen (⇧⌘Z)" aria-label="Wiederholen">↷</button>
+    </div>
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="cv"></canvas>
+      <div class="drop" id="dropHint">
+        <strong>CAD-Plan als PDF hier ablegen</strong>
+        <span>oder oben auf „PDF importieren“ klicken. Ohne Plan kannst du direkt auf dem Raster zeichnen.</span>
+        <div><button id="btnSample" type="button">Beispielplan laden</button></div>
+      </div>
+    </div>
+    <footer class="statusbar">
+      <span id="hint"></span>
+      <div class="spacer"></div>
+      <span id="snapInfo"></span>
+      <span id="coords" class="mono"></span>
+    </footer>
+  </main>
+
+  <aside class="panel">
+    <section>
+      <h2>Ablauf</h2>
+      <ol class="steps" id="steps"></ol>
+    </section>
+    <section id="planSection">
+      <h2>Plan in dieser Ansicht</h2>
+      <label class="row"><span>Blatt</span><select id="bgSelect"></select></label>
+      <label class="row"><span>Deckkraft</span><input id="bgOpacity" type="range" min="0.1" max="1" step="0.05"></label>
+      <label class="row"><span>Maßstab 1:</span><input id="bgRatio" inputmode="decimal"></label>
+      <p class="note" id="scaleNote"></p>
+      <div class="btnrow">
+        <button id="btnNextSheet" class="quiet" title="Nächstes Blatt für diese Ansicht" hidden>Nächstes Blatt</button>
+        <button id="btnRotL" class="quiet" title="Plan 90° nach links drehen">−90°</button>
+        <button id="btnRotR" class="quiet" title="Plan 90° nach rechts drehen">+90°</button>
+        <button id="btnFlip" class="quiet" title="Falls der Schnitt von der anderen Seite gezeichnet ist">Spiegeln</button>
+      </div>
+    </section>
+    <section>
+      <h2>Eigenschaften</h2>
+      <div id="props"><p class="note">Nichts ausgewählt.</p></div>
+    </section>
+    <section class="grow">
+      <h2>Flächen <span id="shapeCount"></span></h2>
+      <ul class="shapes" id="shapes"></ul>
+    </section>
+  </aside>
+</div>
+
+<dialog id="dlgScale">
+  <form method="dialog">
+    <h3>Länge dieser Strecke</h3>
+    <p class="note">Gib das echte Maß der Strecke ein, die du gerade auf dem Plan markiert hast.</p>
+    <div class="inline">
+      <input id="scaleLen" inputmode="decimal" autocomplete="off" aria-label="Länge">
+      <select id="scaleUnit" aria-label="Einheit"><option value="1">m</option><option value="0.01">cm</option><option value="0.001">mm</option></select>
+    </div>
+    <p class="err" id="scaleErr"></p>
+    <div class="dlg-actions">
+      <button type="button" id="scaleCancel" class="quiet">Abbrechen</button>
+      <button id="scaleOk" value="ok" class="primary">Skalieren</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgExport" class="wide">
+  <form method="dialog">
+    <h3>Export für Soundvision</h3>
+    <div id="exportWarnings"></div>
+    <label class="row"><span>Dateiname</span><input id="exportName"></label>
+    <label class="row"><span>Drehung um Z</span>
+      <select id="exportRot"><option value="0">0° (wie gezeichnet)</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
+    </label>
+    <p class="note" id="exportSummary"></p>
+    <details><summary>Dateiinhalt ansehen</summary><pre id="exportPreview"></pre></details>
+    <h4>So kommt es in Soundvision</h4>
+    <ol class="how">
+      <li>Panel <b>3D ROOM DATA</b> öffnen</li>
+      <li><b>Import 3D room data</b> wählen und die .txt-Datei laden</li>
+      <li>Hörhöhe (Listening Level) in Soundvision einstellen, das Format überträgt sie nicht</li>
+    </ol>
+    <div class="dlg-actions">
+      <button value="cancel" class="quiet">Schließen</button>
+      <button id="exportGo" type="button" class="primary">.txt herunterladen</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+/* pdf.js zuerst lokal (vendor/), sonst vom CDN. So läuft das Tool mit vendor/ auch ohne Internet. */
+window.PDFJS_SOURCES = ['vendor/', 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/'];
+</script>
+<script src="app.js"></script>
+</body>
+</html>

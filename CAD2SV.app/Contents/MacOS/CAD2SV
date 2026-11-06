@@ -1,0 +1,4 @@
+#!/bin/bash
+# Öffnet das Tool im Standardbrowser. Die App muss neben index.html liegen.
+DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+open "$DIR/index.html"
