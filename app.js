@@ -189,6 +189,7 @@ function loadPdfjs() {
   if (pdfReady) return pdfReady;
   const addScript = (src) => new Promise((res, rej) => { const e = document.createElement('script'); e.src = src; e.onload = res; e.onerror = rej; document.head.appendChild(e); });
   pdfReady = (async () => {
+    if (window.pdfjsLib) return window.pdfjsLib;   // Einzeldatei: Bibliothek ist schon eingebettet
     for (const base of window.PDFJS_SOURCES) {
       try {
         await addScript(base + 'pdf.min.js');
@@ -1255,9 +1256,6 @@ $('shapes').addEventListener('click', (e) => {
   if (act === 'vis') { pushUndo(); s.visible = s.visible === false; changed(); return; }
   S.sel = id; changed();
 });
-/* Beispielplan zum Ausprobieren: Saal 30 × 20 m, Bühne 10 × 5 m, Kreis r = 4 m (1:100); Seite 2 ist ein Schnitt. */
-const SAMPLE_PDF = 'JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUiA1IDAgUl0gL0NvdW50IDIgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAxMTkxIDg0Ml0gL0NvbnRlbnRzIDQgMCBSID4+CmVuZG9iago0IDAgb2JqCjw8IC9MZW5ndGggMzA3ID4+CnN0cmVhbQowLjggdyAwIDAgMCBSRwoxMDAuMDAwIDgwLjAwMCA4NTAuMzk0IDU2Ni45MjkgcmUgUwozODMuNDY1IDUwNS4xOTcgMjgzLjQ2NSAxNDEuNzMyIHJlIFMKNjM4LjU4MyAyNzguNDI1IG0gNjM4LjU4MyAzNDEuMDQ4IDU4Ny44MjAgMzkxLjgxMSA1MjUuMTk3IDM5MS44MTEgYyA0NjIuNTc0IDM5MS44MTEgNDExLjgxMSAzNDEuMDQ4IDQxMS44MTEgMjc4LjQyNSBjIDQxMS44MTEgMjE1LjgwMiA0NjIuNTc0IDE2NS4wMzkgNTI1LjE5NyAxNjUuMDM5IGMgNTg3LjgyMCAxNjUuMDM5IDYzOC41ODMgMjE1LjgwMiA2MzguNTgzIDI3OC40MjUgYyBTCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iago8PCAvVHlwZSAvUGFnZSAvUGFyZW50IDIgMCBSIC9NZWRpYUJveCBbMCAwIDExOTEgODQyXSAvQ29udGVudHMgNiAwIFIgPj4KZW5kb2JqCjYgMCBvYmoKPDwgL0xlbmd0aCAxMDggPj4Kc3RyZWFtCjAuOCB3IDAgMCAwIFJHCjEwMC4wMDAgMjAwLjAwMCBtIDcyMy42MjIgMjAwLjAwMCBsIDk1MC4zOTQgMjg1LjAzOSBsIDk1MC4zOTQgNDgzLjQ2NSBsIDEwMC4wMDAgNDgzLjQ2NSBsIGggUwplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA3CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMjEgMDAwMDAgbiAKMDAwMDAwMDIwOSAwMDAwMCBuIAowMDAwMDAwNTY3IDAwMDAwIG4gCjAwMDAwMDA2NTUgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA3IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo4MTQKJSVFT0YK';
-$('btnSample').onclick = () => importPdf(new File([fromB64(SAMPLE_PDF)], 'Beispielplan.pdf', { type: 'application/pdf' }));
 const wrap = $('canvasWrap');
 wrap.addEventListener('dragover', (e) => { e.preventDefault(); wrap.classList.add('dragging'); });
 wrap.addEventListener('dragleave', () => wrap.classList.remove('dragging'));

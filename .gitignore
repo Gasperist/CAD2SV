@@ -3,3 +3,4 @@
 # Projektdateien und Exporte enthalten Kundenpläne
 *.cad2sv.json
 *_soundvision.txt
+dist/

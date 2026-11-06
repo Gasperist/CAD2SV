@@ -83,7 +83,6 @@ input[type=checkbox] { accent-color: var(--accent); margin: 0 5px 0 0; }
   border: 1.5px dashed #788; border-radius: 10px; background: rgba(22,24,28,.86);
   display: flex; flex-direction: column; gap: 5px;
 }
-.drop button { pointer-events: auto; margin-top: 6px; }
 .drop strong { font-size: 15px; }
 .drop span { color: var(--dim); }
 .canvas-wrap.dragging .drop { border-color: var(--accent); }

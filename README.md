@@ -2,15 +2,11 @@
 
 CAD-Plan als PDF laden, skalieren, Flächen nachzeichnen und als `.txt` für Soundvision exportieren. Läuft komplett lokal im Browser, deine Pläne verlassen den Rechner nicht.
 
-# [⬇ CAD2SV herunterladen](https://github.com/Gasperist/CAD2SV/archive/refs/heads/main.zip)
+# [⬇ CAD2SV herunterladen](https://github.com/Gasperist/CAD2SV/releases/latest/download/CAD2SV.html)
 
 ## Installation
 
-1. ZIP-Datei über den Link oben herunterladen und entpacken.
-2. Den Ordner an einen festen Platz legen, zum Beispiel in „Dokumente“.
-3. `index.html` doppelklicken. Das Tool öffnet sich im Browser und läuft auch ohne Internet.
-
-Mehr ist nicht nötig. Ein Lesezeichen im Browser erspart dir künftig den Weg in den Ordner.
+Nichts zu installieren: Datei herunterladen, an einen festen Platz legen und doppelklicken. Das Tool öffnet sich im Browser und läuft auch ohne Internet.
 
 ## In Soundvision importieren
 
