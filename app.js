@@ -7,11 +7,16 @@ const $ = (id) => document.getElementById(id);
 const cv = $('cv'), ctx = cv.getContext('2d');
 const PT_PER_M = 72 / 0.0254;          // PDF-Punkte pro echtem Meter auf dem Papier
 const COLORS = { audience: '#e8890c', stage: '#1f7ae0', wall: '#6b7686', avoid: '#e04444', keepclear: '#12a56f' };
+const LINE_TOOLS = ['poly', 'room', 'wall'];
+const TYPED_TOOLS = ['rect', 'rrect', 'poly', 'room', 'wall', 'circle'];
+const minPts = (t) => t === 'wall' ? 2 : 3;
 const TOOL_HINT = {
+  wall: 'Wand: entlang der Wand klicken, Enter beendet. Klick auf den ersten Punkt schließt. Länge eintippen und Enter setzt den Punkt exakt.',
+  room: 'Raum: Umriss klicken, Enter schließt. Erzeugt Boden und Wände, nur die Wände bekommen die Wandhöhe.',
   select: 'Fläche oder Eckpunkt ziehen, mit Shift nur senkrecht oder waagrecht. Leere Stelle ziehen verschiebt die Ansicht.',
-  rect: 'Rechteck: erste Ecke, dann gegenüberliegende Ecke. Shift ergibt ein Quadrat.',
+  rect: 'Rechteck: erste Ecke, dann gegenüberliegende Ecke. Oder Maß eintippen, zum Beispiel 12,5x8, und Enter.',
   rrect: 'Schräges Rechteck: Kante mit zwei Klicks festlegen, dritter Klick setzt die Breite.',
-  poly: 'Polygon: Punkte klicken. Enter, Doppelklick oder Klick auf den ersten Punkt schließt. Rücktaste nimmt einen Punkt zurück.',
+  poly: 'Polygon: Punkte klicken, Enter schließt. Länge eintippen und Enter setzt den Punkt exakt. Rücktaste nimmt einen Punkt zurück.',
   circle: 'Kreis: Mittelpunkt klicken, dann den Radius.',
   ring: 'Bogen: Mittelpunkt, Anfang am Außenradius, Ende, zuletzt Innenradius.',
   scale: 'Skalieren: Anfang und Ende einer Strecke klicken, deren echtes Maß du kennst.',
@@ -23,14 +28,14 @@ const TOOL_HINT = {
 const newView = () => ({ bg: null, ppm: PT_PER_M / 100, calibrated: false, originSet: false, ox: 0, oy: 0, rot: 0, flip: false, opacity: 1 });
 const S = {
   pdfs: [], views: { top: newView(), side: newView(), front: newView() }, shapes: [], nextId: 1,
-  sel: null, view: 'top', tool: 'select', drawZ: 0, sliceY: 0, sliceX: 0, label: 'Audience',
+  sel: null, view: 'top', tool: 'select', drawZ: 0, wallH: 3, sliceY: 0, sliceX: 0, label: 'Audience',
 };
 const cams = {
   top: { cx: 0, cy: 0, zoom: 12 }, side: { cx: 0, cy: 5, zoom: 12 }, front: { cx: 0, cy: 5, zoom: 12 },
   iso: { az: -0.6, el: 0.75, tx: 0, ty: 0, tz: 0, zoom: 10 },
 };
 let W = 800, H = 600, dpr = 1;
-let draft = null, hover = null, snapHit = null, press = null, drag = null, spaceDown = false, measure = null, snapDisabled = false;
+let draftNum = '', draft = null, hover = null, snapHit = null, press = null, drag = null, spaceDown = false, measure = null, snapDisabled = false;
 let undoStack = [], redoStack = [], planCache = new Map(), isoFaces = [];
 let pdfReady = null, crisp = null, crispTask = null, crispTimer = 0;
 
@@ -95,7 +100,22 @@ function triangulate(pts) {
   return tris;
 }
 const sweepOf = (s) => Math.min(360, Math.max(0.1, s.a1 - s.a0));
+function wallQuads(s) {
+  const P = s.pts, n = P.length, segs = s.closed ? n : n - 1, z1 = s.z0 + s.h, out = [];
+  let area = 0;
+  P.forEach((p, i) => { const q = P[(i + 1) % n]; area += p.x * q.y - q.x * p.y; });
+  for (let i = 0; i < segs; i++) {
+    const a = P[i], b = P[(i + 1) % n];
+    const q = [{ x: a.x, y: a.y, z: s.z0 }, { x: b.x, y: b.y, z: s.z0 }, { x: b.x, y: b.y, z: z1 }, { x: a.x, y: a.y, z: z1 }];
+    out.push(s.closed && area > 0 ? q.reverse() : q);    // geschlossener Raum: Vorderseite zeigt nach innen
+  }
+  return out;
+}
 function tess(s) {
+  if (s.type === 'wall') {
+    const q = wallQuads(s);
+    return { tris: q.flatMap((f) => [[f[0], f[1], f[2]], [f[2], f[3], f[0]]]), loops: q };
+  }
   if (s.type === 'poly') return { tris: triangulate(s.pts), loops: [s.pts] };
   const sw = sweepOf(s), full = sw >= 359.999, n = Math.max(3, Math.ceil(s.seg * sw / 360));
   const O = [], I = [], hasInner = s.ri > 1e-6;
@@ -115,6 +135,24 @@ function tess(s) {
   return { tris, loops };
 }
 const allPoints = (s) => tess(s).loops.flat();
+/* Ganze Flächen für den Export: ein Block pro Fläche, solange sie eben ist und kein Loch hat. */
+function faces(s) {
+  if (s.type === 'wall') return wallQuads(s);
+  const t = tess(s);
+  if (s.type === 'poly') {
+    const N = newell(s.pts), len = Math.hypot(...N);
+    if (len < 1e-9) return [];
+    const p0 = s.pts[0], planar = s.pts.every((p) => Math.abs((p.x - p0.x) * N[0] + (p.y - p0.y) * N[1] + (p.z - p0.z) * N[2]) / len < 1e-3);
+    return planar ? [s.pts] : t.tris;
+  }
+  if (s.z === s.zo && t.loops.length === 1) return [t.loops[0]];
+  if (s.ri > 1e-6) {                                     // Ring oder geneigter Bogen: ein Viereck pro Segment
+    const q = [];
+    for (let i = 0; i + 1 < t.tris.length; i += 2) q.push([t.tris[i][0], t.tris[i][1], t.tris[i][2], t.tris[i + 1][2]]);
+    return q;
+  }
+  return t.tris;
+}
 
 function labelColor(label) {
   const k = String(label).toLowerCase().replace(/[^a-z]/g, '');
@@ -126,32 +164,32 @@ function labelColor(label) {
 /* ---------- Export ---------- */
 function cleanLabel(l) {
   const map = { 'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'Ä': 'Ae', 'Ö': 'Oe', 'Ü': 'Ue', 'ß': 'ss' };
-  const out = String(l).replace(/[äöüÄÖÜß]/g, (c) => map[c]).replace(/["\r\n]/g, ' ').replace(/[^\x20-\x7E]/g, '').trim();
+  const out = String(l).replace(/[äöüÄÖÜß]/g, (c) => map[c]).replace(/["\r\n]/g, ' ').replace(/-/g, '_').replace(/[^\x20-\x7E]/g, '').trim();
   return out || 'Surface';
 }
 const nstr = (v) => { const r = Math.round(v * 1000) / 1000; return String(r === 0 ? 0 : r); };
-function exportTriangles(rotDeg = 0) {
+function exportFaces(rotDeg = 0, mode = 'whole') {
   const a = rotDeg * Math.PI / 180, c = Math.round(Math.cos(a)), s = Math.round(Math.sin(a));
   const out = [];
   for (const sh of S.shapes) {
     if (sh.visible === false) continue;
-    for (const t of tess(sh).tris) {
-      let v = t.map((p) => ({ x: p.x * c - p.y * s, y: p.x * s + p.y * c, z: p.z }));
-      const ux = v[1].x-v[0].x, uy = v[1].y-v[0].y, uz = v[1].z-v[0].z, wx = v[2].x-v[0].x, wy = v[2].y-v[0].y, wz = v[2].z-v[0].z;
-      const nx = uy*wz-uz*wy, ny = uz*wx-ux*wz, nz = ux*wy-uy*wx, len = Math.hypot(nx, ny, nz);
-      if (len < 1e-7) continue;                                   // entartetes Dreieck
-      if (Math.abs(nz) > 1e-6 * len && nz < 0) v = v.reverse();   // Vorderseite (weiß) nach oben
+    for (const f of mode === 'tri' ? tess(sh).tris : faces(sh)) {
+      let v = f.map((p) => ({ x: p.x * c - p.y * s, y: p.x * s + p.y * c, z: p.z }));
+      const N = newell(v), len = Math.hypot(...N);
+      if (len < 1e-7) continue;                                     // entartete Fläche
+      if (Math.abs(N[2]) > 1e-6 * len && N[2] < 0) v = v.reverse(); // Vorderseite (weiß) nach oben
       if (sh.flip) v = v.slice().reverse();
       out.push({ label: cleanLabel(sh.label), v });
     }
   }
   return out;
 }
-function exportText(rotDeg = 0) {
+const exportTriangles = (rotDeg = 0) => exportFaces(rotDeg, 'tri');
+function exportText(rotDeg = 0, mode = 'whole') {
   let t = '"; Exported by CAD2SV"\n"; "\n";   using Outside is front (white)"\n";   using Name By Layer"\n";   using Visible Entities"\n";"\n";"\n";"\n"; LengthUnit", "m"\n";"\n';
-  for (const tri of exportTriangles(rotDeg)) {
-    t += `"Label","${tri.label}"\n`;
-    for (const p of tri.v) t += `${nstr(p.x)},${nstr(p.y)},${nstr(p.z)}\n`;
+  for (const f of exportFaces(rotDeg, mode)) {
+    t += `"Label","${f.label}"\n`;
+    for (const p of f.v) t += `${nstr(p.x)},${nstr(p.y)},${nstr(p.z)}\n`;
     t += '";"\n';
   }
   return t;
@@ -178,7 +216,7 @@ function recalibrate(vk, mutate) {
   const T = mul(plan2uv(V), inv(before)), scale = Math.hypot(T[0], T[1]), rot = Math.atan2(T[1], T[0]) * 180 / Math.PI;
   const cam = cams[vk]; const [cx, cy] = ap(T, cam.cx, cam.cy); cam.cx = cx; cam.cy = cy; cam.zoom /= scale;
   if (vk === 'top') for (const s of S.shapes) {
-    if (s.type === 'poly') s.pts.forEach((p) => { [p.x, p.y] = ap(T, p.x, p.y); });
+    if (s.type !== 'round') s.pts.forEach((p) => { [p.x, p.y] = ap(T, p.x, p.y); });
     else { [s.c.x, s.c.y] = ap(T, s.c.x, s.c.y); s.r *= scale; s.ri *= scale; s.a0 += rot; s.a1 += rot; }
   }
   invalidateCrisp(); scheduleCrisp();
@@ -394,8 +432,8 @@ function drawShapes2D(cam, vk) {
     ctx.globalAlpha = 1;
     shapePath(t.loops, proj);
     if (on) { ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke(); }
-    ctx.lineWidth = on ? 2 : 1.5; ctx.strokeStyle = col; ctx.stroke();
-    if (vk === 'top' && cam.zoom > 3) {
+    ctx.lineWidth = s.type === 'wall' && vk === 'top' ? 4 : (on ? 2 : 1.5); ctx.strokeStyle = col; ctx.stroke();
+    if (vk === 'top' && cam.zoom > 3 && s.type !== 'wall') {
       const pts = t.loops[0]; let cx = 0, cy = 0; pts.forEach((p) => { const [x, y] = proj(p); cx += x; cy += y; });
       halo(s.label, cx / pts.length, cy / pts.length + 4, '#fff', 'center');
     }
@@ -403,6 +441,23 @@ function drawShapes2D(cam, vk) {
 }
 function handlesOf(s, vk) {
   const out = [];
+  if (s.type === 'wall') {
+    if (vk === 'top') {
+      s.pts.forEach((p, i) => out.push({ u: p.x, v: p.y, kind: 'v', idxs: [i] }));
+      s.pts.forEach((p, i) => {
+        if (!s.closed && i === s.pts.length - 1) return;
+        const q = s.pts[(i + 1) % s.pts.length];
+        if (Math.hypot(p.x - q.x, p.y - q.y) * cams.top.zoom > 40) out.push({ u: (p.x + q.x) / 2, v: (p.y + q.y) / 2, kind: 'mid', i });
+      });
+      return out;
+    }
+    const groups = new Map();
+    s.pts.forEach((p, i) => { const u = vk === 'side' ? p.x : p.y, k = Math.round(u * 500); if (!groups.has(k)) groups.set(k, { u, idxs: [] }); groups.get(k).idxs.push(i); });
+    for (const g of groups.values()) {
+      out.push({ u: g.u, v: s.z0, kind: 'wb', idxs: g.idxs }, { u: g.u, v: s.z0 + s.h, kind: 'wt', idxs: g.idxs });
+    }
+    return out;
+  }
   if (s.type === 'poly') {
     const groups = new Map();
     s.pts.forEach((p, i) => { const [u, v] = uvOf(p, vk), k = Math.round(u * 500) + ':' + Math.round(v * 500); if (!groups.has(k)) groups.set(k, { u, v, kind: 'v', idxs: [] }); groups.get(k).idxs.push(i); });
@@ -460,7 +515,7 @@ function drawDraft(cam) {
   else if (T === 'rrect') {
     if (P.length === 1 && cur) { seg(P[0], cur); tag(fmt(d(P[0], cur)) + ' m'); }
     else if (cur) { const q = rrectCorners(P[0], P[1], cur); fillPoly(q); tag(`${fmt(d(P[0], P[1]))} × ${fmt(d(q[1], q[2]))} m`); }
-  } else if (T === 'poly') {
+  } else if (LINE_TOOLS.includes(T)) {
     P.forEach((a, i) => { if (i) seg(P[i - 1], a); });
     if (cur) { seg(P[P.length - 1], cur); tag(fmt(d(P[P.length - 1], cur)) + ' m'); }
   } else if (T === 'circle' && cur) {
@@ -482,6 +537,7 @@ function drawDraft(cam) {
     seg(P[0], cur, T === 'scale' ? '#e5484d' : '#00b8d9');
     if (T !== 'align') tag((T === 'scale' && !curView().calibrated ? '≈ ' : '') + fmt(d(P[0], cur)) + ' m');
   }
+  if (draftNum && hover) { const p = m(hover.u, hover.v); halo('Eingabe: ' + draftNum + ' m, Enter setzt', p[0] + 14, p[1] + 24, '#7fe7ff'); }
 }
 function draw() {
   resetM();
@@ -533,18 +589,18 @@ function draw3D() {
     a = P(-ext, i * step, 0); b = P(ext, i * step, 0); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
   }
   ctx.stroke();
-  const faces = [];
+  const list = [];
   for (const s of S.shapes) {
     if (s.visible === false) continue;
     const col = labelColor(s.label);
-    for (const t of tess(s).tris) { const q = t.map((p) => P(p.x, p.y, p.z)); faces.push({ s, q, col, d: (q[0][2] + q[1][2] + q[2][2]) / 3 }); }
+    for (const t of faces(s)) { const q = t.map((p) => P(p.x, p.y, p.z)); list.push({ s, q, col, d: q.reduce((a, p) => a + p[2], 0) / q.length }); }
   }
-  faces.sort((a, b) => b.d - a.d);
-  isoFaces = faces;
-  for (const f of faces) {
+  list.sort((a, b) => b.d - a.d);
+  isoFaces = list;
+  for (const f of list) {
     const on = f.s.id === S.sel;
-    ctx.beginPath(); ctx.moveTo(f.q[0][0], f.q[0][1]); ctx.lineTo(f.q[1][0], f.q[1][1]); ctx.lineTo(f.q[2][0], f.q[2][1]); ctx.closePath();
-    ctx.globalAlpha = on ? .9 : .72; ctx.fillStyle = f.col; ctx.fill();
+    ctx.beginPath(); f.q.forEach((p, i) => { if (i) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]); }); ctx.closePath();
+    ctx.globalAlpha = f.s.type === 'wall' ? (on ? .6 : .38) : (on ? .9 : .72); ctx.fillStyle = f.col; ctx.fill();
     ctx.lineWidth = .7; ctx.strokeStyle = f.col; ctx.stroke(); ctx.globalAlpha = 1;
   }
   for (const s of S.shapes) {
@@ -557,10 +613,12 @@ function draw3D() {
   ctx.beginPath(); ctx.arc(o[0], o[1], 4, 0, 7); ctx.fillStyle = '#fff'; ctx.fill();
 }
 function hit3D(x, y) {
-  const side = (a, b) => (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
   for (let i = isoFaces.length - 1; i >= 0; i--) {
-    const q = isoFaces[i].q, d1 = side(q[0], q[1]), d2 = side(q[1], q[2]), d3 = side(q[2], q[0]);
-    if ((d1 >= 0 && d2 >= 0 && d3 >= 0) || (d1 <= 0 && d2 <= 0 && d3 <= 0)) return isoFaces[i].s;
+    const q = isoFaces[i].q; let inside = false;
+    for (let k = 0, m = q.length - 1; k < q.length; m = k++) {
+      if ((q[k][1] > y) !== (q[m][1] > y) && x < (q[m][0] - q[k][0]) * (y - q[k][1]) / (q[m][1] - q[k][1]) + q[k][0]) inside = !inside;
+    }
+    if (inside) return isoFaces[i].s;
   }
   return null;
 }
@@ -605,8 +663,8 @@ function rrectCorners(a, b, c) {
 }
 
 /* ---------- Werkzeuge ---------- */
-function addShape(s) {
-  pushUndo();
+function addShape(s, noUndo) {
+  if (!noUndo) pushUndo();
   s.id = S.nextId++; s.label = s.label || S.label; s.visible = true; s.flip = false;
   S.shapes.push(s); S.sel = s.id;
   changed();
@@ -615,14 +673,15 @@ function addShape(s) {
 function addPoly(uvs, kind) { addShape({ type: 'poly', kind, pts: uvs.map(([u, v]) => toWorld(u, v)) }); }
 function setTool(t) {
   if (is3D() && t !== 'select') setView('top');
-  if ((t === 'circle' || t === 'ring') && S.view !== 'top') { setView('top'); toast('Kreise und Bögen liegen im Grundriss, deshalb Draufsicht. Ihre Höhe stellst du danach ein.'); }
-  S.tool = t; draft = null; if (t !== 'measure') measure = null;
+  if (['circle', 'ring', 'wall', 'room'].includes(t) && S.view !== 'top') { setView('top'); toast('Diese Form zeichnest du im Grundriss, deshalb Draufsicht.'); }
+  S.tool = t; draft = null; draftNum = ''; if (t !== 'measure') measure = null;
   document.querySelectorAll('.tools button').forEach((b) => b.classList.toggle('on', b.dataset.tool === t));
   cv.style.cursor = t === 'select' ? 'default' : 'crosshair';
   updateHint(); render();
 }
 function updateHint() { $('hint').textContent = is3D() ? '3D: ziehen dreht, rechte Taste oder Leertaste verschiebt, Rad oder Pinch zoomt, Klick wählt eine Fläche.' : TOOL_HINT[S.tool]; }
 function clickTool(pt) {
+  draftNum = '';
   const t = S.tool, q = [pt.u, pt.v];
   if (t === 'origin') {
     pushUndo();
@@ -639,10 +698,10 @@ function clickTool(pt) {
     if (Math.abs(a[0] - b[0]) < 1e-3 || Math.abs(a[1] - b[1]) < 1e-3) { P.pop(); return; }
     draft = null; addPoly([a, [b[0], a[1]], b, [a[0], b[1]]], 'rect');
   } else if (t === 'rrect' && P.length === 3) { draft = null; addPoly(rrectCorners(P[0], P[1], P[2]), 'rect'); }
-  else if (t === 'poly' && P.length > 1) {
+  else if (LINE_TOOLS.includes(t) && P.length > 1) {
     const M = uv2screen(cams[S.view]), dist = (a, b) => { const A = ap(M, a[0], a[1]), B = ap(M, b[0], b[1]); return Math.hypot(A[0] - B[0], A[1] - B[1]); };
-    if (P.length > 3 && dist(q, P[0]) < 11) { P.pop(); finishPoly(); }
-    else if (dist(q, P[P.length - 2]) < 4) { P.pop(); if (P.length >= 3) finishPoly(); }
+    if (P.length > 3 && dist(q, P[0]) < 11) { P.pop(); finishPoly(true); }
+    else if (dist(q, P[P.length - 2]) < 4) { P.pop(); if (P.length >= minPts(t)) finishPoly(); }
   } else if (t === 'circle' && P.length === 2) {
     const r = Math.hypot(P[0][0] - P[1][0], P[0][1] - P[1][1]);
     if (r < 1e-3) { P.pop(); return; }
@@ -670,9 +729,38 @@ function clickTool(pt) {
     setTool('select'); changed(); toast('Plan ausgerichtet: diese Linie ist jetzt die horizontale Achse.');
   }
 }
-function finishPoly() {
-  if (!draft || draft.tool !== 'poly' || draft.pts.length < 3) { toast('Ein Polygon braucht mindestens drei Punkte.', true); return; }
-  const pts = draft.pts; draft = null; addPoly(pts, 'poly');
+const newWall = (uvs, closed, z0 = S.drawZ) => ({ type: 'wall', pts: uvs.map(([x, y]) => ({ x, y })), closed, z0, h: S.wallH, label: 'Wall' });
+function finishPoly(closed) {
+  if (!draft || !LINE_TOOLS.includes(draft.tool)) return;
+  const t = draft.tool, pts = draft.pts;
+  if (pts.length < minPts(t)) { toast(t === 'wall' ? 'Eine Wand braucht mindestens zwei Punkte.' : 'Dafür braucht es mindestens drei Punkte.', true); return; }
+  draft = null; draftNum = '';
+  if (t === 'poly') addPoly(pts, 'poly');
+  else if (t === 'wall') addShape(newWall(pts, !!closed));
+  else { addPoly(pts, 'poly'); addShape(newWall(pts, true), true); }   // Raum: Boden und Wände, ein Rückgängig-Schritt
+}
+/* Eingetipptes Maß: setzt den nächsten Punkt exakt in Richtung des Mauszeigers. */
+function applyTyped() {
+  const txt = draftNum.replace(/,/g, '.').toLowerCase(); draftNum = '';
+  if (!draft || !draft.pts.length) return;
+  const P = draft.pts, T = draft.tool, last = P[P.length - 1], cur = hover ? [hover.u, hover.v] : [last[0] + 1, last[1]];
+  if (T === 'rect') {
+    const m = txt.split(/[x*]/).map(parseFloat);
+    if (m.length !== 2 || !(m[0] > 0) || !(m[1] > 0)) { toast('Rechteck als Breite x Tiefe eingeben, zum Beispiel 12,5x8.', true); return; }
+    clickTool({ u: P[0][0] + (cur[0] >= P[0][0] ? 1 : -1) * m[0], v: P[0][1] + (cur[1] >= P[0][1] ? 1 : -1) * m[1] });
+    return;
+  }
+  const l = parseFloat(txt);
+  if (!(l > 0)) { toast('Bitte eine Länge in Metern eingeben, zum Beispiel 11,75.', true); return; }
+  if (T === 'rrect' && P.length === 2) {
+    const dx = P[1][0] - P[0][0], dy = P[1][1] - P[0][1], L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
+    const side = (cur[0] - P[1][0]) * nx + (cur[1] - P[1][1]) * ny >= 0 ? 1 : -1;
+    clickTool({ u: P[1][0] + nx * side * l, v: P[1][1] + ny * side * l });
+    return;
+  }
+  let du = cur[0] - last[0], dv = cur[1] - last[1], d = Math.hypot(du, dv);
+  if (d < 1e-9) { du = 1; dv = 0; d = 1; }
+  clickTool({ u: last[0] + du / d * l, v: last[1] + dv / d * l });
 }
 function trackSweep() {
   if (!draft || draft.tool !== 'ring' || draft.pts.length !== 2 || !hover) return;
@@ -713,7 +801,7 @@ function openExport() {
   $('dlgExport').showModal();
 }
 function refreshExport() {
-  const rot = Number($('exportRot').value), tris = exportTriangles(rot), T = S.views.top;
+  const rot = Number($('exportRot').value), mode = $('exportMode').value, tris = exportFaces(rot, mode), T = S.views.top;
   const warnings = [];
   if (!S.shapes.length) warnings.push('Es gibt noch keine Flächen. Die Datei wäre leer.');
   if (T.bg && !T.calibrated) warnings.push('Die Draufsicht ist noch nicht skaliert. Alle Maße wären nur geschätzt (1:100).');
@@ -727,8 +815,8 @@ function refreshExport() {
     const [x, y, z] = ['x', 'y', 'z'].map(r);
     box = ` Ausdehnung: X ${fmt(x[0])} bis ${fmt(x[1])}, Y ${fmt(y[0])} bis ${fmt(y[1])}, Z ${fmt(z[0])} bis ${fmt(z[1])} m.`;
   }
-  $('exportSummary').textContent = `${S.shapes.length - hidden} Fläche(n), ${tris.length} Dreiecke.` + box;
-  const lines = exportText(rot).split('\n');
+  $('exportSummary').textContent = `${S.shapes.length - hidden} Fläche(n), ${tris.length} Block/Blöcke in der Datei.` + box;
+  const lines = exportText(rot, mode).split('\n');
   $('exportPreview').textContent = lines.slice(0, 60).join('\n') + (lines.length > 60 ? `\n… (${lines.length} Zeilen gesamt)` : '');
   $('exportGo').disabled = !tris.length;
 }
@@ -750,7 +838,7 @@ async function download(name, data, type = 'text/plain;charset=utf-8') {
 function changed(skipProps) { render(); renderPanels(skipProps); scheduleAutosave(); }
 function setView(v) {
   if (S.view === v) return;
-  draft = null; hover = null; snapHit = null; invalidateCrisp();
+  draft = null; draftNum = ''; hover = null; snapHit = null; invalidateCrisp();
   S.view = v;
   if (v === 'iso' && S.tool !== 'select') { S.tool = 'select'; cv.style.cursor = 'default'; }
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
@@ -763,7 +851,7 @@ function renderSteps() {
     ['Plan skalieren', T.calibrated],
     ['Nullpunkt setzen', T.originSet],
     ['Flächen nachzeichnen', S.shapes.length > 0],
-    ['Höhen einstellen (Seite / 3D)', S.shapes.some((s) => s.type === 'poly' ? s.pts.some((p) => p.z !== 0) : s.z !== 0 || s.zo !== 0)],
+    ['Wände und Höhen prüfen (Seite / 3D)', S.shapes.some((s) => s.type === 'wall' || (s.type === 'poly' ? s.pts.some((p) => p.z !== 0) : s.z !== 0 || s.zo !== 0))],
   ];
   const now = list.findIndex((l) => !l[1]);
   $('steps').innerHTML = list.map(([t, ok], i) => `<li class="${ok ? 'done' : ''} ${i === now ? 'now' : ''}"><b>${ok ? '✓' : i + 1}</b><span>${t}</span></li>`).join('');
@@ -771,8 +859,10 @@ function renderSteps() {
 function renderPlanPanel() {
   const v3 = is3D(); $('planSection').style.display = v3 ? 'none' : '';
   $('planeField').style.display = v3 ? 'none' : '';
-  if (v3) return;
+  if (v3) { $('wallField').style.display = 'none'; return; }
   const V = S.views[S.view];
+  $('wallField').style.display = S.view === 'top' ? '' : 'none';
+  if (document.activeElement !== $('wallH')) $('wallH').value = inputNum(S.wallH);
   $('planeLabel').textContent = S.view === 'top' ? 'Zeichenhöhe Z' : S.view === 'side' ? 'Zeichenebene Y' : 'Zeichenebene X';
   const pv = S.view === 'top' ? S.drawZ : S.view === 'side' ? S.sliceY : S.sliceX;
   if (document.activeElement !== $('planeValue')) $('planeValue').value = inputNum(pv);
@@ -799,7 +889,7 @@ function renderList() {
   if (!S.shapes.length) { ul.innerHTML = '<li class="note" style="cursor:default">Noch keine Flächen gezeichnet.</li>'; return; }
   ul.innerHTML = S.shapes.map((s) => `<li data-id="${s.id}" class="${s.id === S.sel ? 'on' : ''} ${s.visible === false ? 'off' : ''}">
     <span class="sw" style="background:${labelColor(s.label)}"></span>
-    <span class="nm">${esc(s.label)}</span><span class="ty">${s.type === 'poly' ? (s.kind === 'rect' ? 'Rechteck' : 'Polygon') : roundName(s)}</span>
+    <span class="nm">${esc(s.label)}</span><span class="ty">${s.type === 'wall' ? 'Wand' : s.type === 'poly' ? (s.kind === 'rect' ? 'Rechteck' : 'Polygon') : roundName(s)}</span>
     <button data-act="vis" title="${s.visible === false ? 'Einblenden' : 'Ausblenden'}" aria-label="Ein- oder ausblenden">${s.visible === false ? '◌' : '●'}</button>
     <button data-act="del" title="Löschen" aria-label="Löschen">×</button></li>`).join('');
 }
@@ -810,14 +900,24 @@ function renderProps() {
     <datalist id="labelList"><option value="Audience"><option value="Stage"><option value="Wall"><option value="Avoid"><option value="KeepClear"></datalist>`;
   const flip = `<label class="chk"><input type="checkbox" data-f="flip" ${s.flip ? 'checked' : ''}>Vorderseite umkehren</label>`;
   const btns = `<div class="btnrow"><button id="propDup" class="quiet" type="button">Duplizieren</button><button id="propDel" class="quiet" type="button">Löschen</button></div>`;
+  if (s.type === 'wall') {
+    const rows = s.pts.map((p, i) => `<tr><td>${i + 1}</td>${['x', 'y'].map((k) => `<td><input data-v="${i}" data-k="${k}" value="${inputNum(p[k])}" inputmode="decimal" aria-label="Punkt ${i + 1} ${k.toUpperCase()}"></td>`).join('')}</tr>`).join('');
+    box.innerHTML = labelRow +
+      `<label class="row"><span>Wandhöhe</span><input data-f="h" value="${inputNum(s.h)}" inputmode="decimal"></label>` +
+      `<label class="row"><span>Unterkante Z</span><input data-f="z0" value="${inputNum(s.z0)}" inputmode="decimal"></label>` +
+      `<label class="chk"><input type="checkbox" data-f="closed" ${s.closed ? 'checked' : ''}>Umlaufend geschlossen</label>` +
+      `<table class="vtable"><thead><tr><th></th><th>X</th><th>Y</th></tr></thead><tbody>${rows}</tbody></table>` + flip + btns;
+    return;
+  }
+  const wallBtn = `<div class="btnrow"><button id="propWalls" class="quiet" type="button" title="Die Fläche bleibt unverändert, darum herum entstehen Wände mit der eingestellten Wandhöhe">Wände aus Umriss erzeugen</button></div>`;
   if (s.type === 'poly') {
     const rows = s.pts.map((p, i) => `<tr><td>${i + 1}</td>${['x', 'y', 'z'].map((k) => `<td><input data-v="${i}" data-k="${k}" value="${inputNum(p[k])}" inputmode="decimal" aria-label="Punkt ${i + 1} ${k.toUpperCase()}"></td>`).join('')}</tr>`).join('');
-    box.innerHTML = labelRow + `<label class="row"><span>Alle Z auf</span><input id="allZ" placeholder="Höhe in m" inputmode="decimal"></label>` +
-      `<table class="vtable"><thead><tr><th></th><th>X</th><th>Y</th><th>Z</th></tr></thead><tbody>${rows}</tbody></table>` + flip + btns;
+    box.innerHTML = labelRow + `<label class="row"><span>Ganze Fläche Z</span><input id="allZ" placeholder="Höhe in m" inputmode="decimal"></label>` +
+      `<table class="vtable"><thead><tr><th></th><th>X</th><th>Y</th><th>Z</th></tr></thead><tbody>${rows}</tbody></table>` + flip + wallBtn + btns;
   } else {
     const r = (lab, f, v) => `<label class="row"><span>${lab}</span><input data-f="${f}" value="${inputNum(v)}" inputmode="decimal"></label>`;
     box.innerHTML = labelRow + r('Mitte X', 'cx', s.c.x) + r('Mitte Y', 'cy', s.c.y) + r('Radius', 'r', s.r) + r('Innenradius', 'ri', s.ri) +
-      r('Winkel von', 'a0', s.a0) + r('Winkel bis', 'a1', s.a1) + r('Z innen', 'z', s.z) + r('Z außen', 'zo', s.zo) + r('Segmente', 'seg', s.seg) + flip + btns;
+      r('Winkel von', 'a0', s.a0) + r('Winkel bis', 'a1', s.a1) + r('Z innen', 'z', s.z) + r('Z außen', 'zo', s.zo) + r('Segmente', 'seg', s.seg) + flip + wallBtn + btns;
   }
 }
 function renderPanels(skipProps) {
@@ -832,12 +932,14 @@ function applyPropChange(t) {
   /* Eigene Felder nicht neu aufbauen, damit Tab zum nächsten Feld funktioniert */
   if (t.dataset.v !== undefined) { const v = num(t.value); if (v === null) return renderProps(); pushUndo(); s.pts[+t.dataset.v][t.dataset.k] = v; changed(true); return; }
   const f = t.dataset.f; if (!f) return;
-  if (f === 'label') { pushUndo(); s.label = t.value.trim() || 'Surface'; S.label = s.label; changed(true); return; }
+  if (f === 'label') { pushUndo(); s.label = t.value.trim() || 'Surface'; if (s.type !== 'wall') S.label = s.label; changed(true); return; }
+  if (f === 'closed') { pushUndo(); s.closed = t.checked; changed(); return; }
   if (f === 'flip') { pushUndo(); s.flip = t.checked; changed(true); return; }
   const v = num(t.value); if (v === null) return renderProps();
   pushUndo();
   if (f === 'cx') s.c.x = v; else if (f === 'cy') s.c.y = v;
   else if (f === 'r') s.r = Math.max(0.01, v); else if (f === 'ri') s.ri = Math.max(0, Math.min(v, s.r * 0.999));
+  else if (f === 'h') s.h = Math.max(0.05, v);
   else if (f === 'seg') s.seg = Math.max(6, Math.min(360, Math.round(v)));
   else if (f === 'a1') s.a1 = v <= s.a0 ? v + 360 : v;
   else s[f] = v;
@@ -847,7 +949,7 @@ function applyPropChange(t) {
 function duplicateSel() {
   const s = S.shapes.find((x) => x.id === S.sel); if (!s) return;
   const c = JSON.parse(JSON.stringify(s));
-  if (c.type === 'poly') c.pts.forEach((p) => { p.x += 1; p.y -= 1; }); else { c.c.x += 1; c.c.y -= 1; }
+  if (c.type !== 'round') c.pts.forEach((p) => { p.x += 1; p.y -= 1; }); else { c.c.x += 1; c.c.y -= 1; }
   pushUndo(); c.id = S.nextId++; S.shapes.push(c); S.sel = c.id; changed();
 }
 function deleteSel() {
@@ -879,11 +981,21 @@ function hitShape(x, y) {
   return null;
 }
 function moveShape(s, vk, du, dv) {
-  if (s.type === 'poly') s.pts.forEach((p) => { const [u, v] = uvOf(p, vk); setUV(p, vk, u + du, v + dv); });
+  if (s.type === 'wall') {
+    if (vk === 'top') s.pts.forEach((p) => { p.x += du; p.y += dv; });
+    else { s.pts.forEach((p) => { if (vk === 'side') p.x += du; else p.y += du; }); s.z0 += dv; }
+  } else if (s.type === 'poly') s.pts.forEach((p) => { const [u, v] = uvOf(p, vk); setUV(p, vk, u + du, v + dv); });
   else if (vk === 'top') { s.c.x += du; s.c.y += dv; }
   else { if (vk === 'side') s.c.x += du; else s.c.y += du; s.z += dv; s.zo += dv; }
 }
 function applyHandle(s, h, u, v) {
+  if (s.type === 'wall') {
+    if (h.kind === 'v') { h.idxs.forEach((i) => { s.pts[i].x = u; s.pts[i].y = v; }); return; }
+    h.idxs.forEach((i) => { if (S.view === 'side') s.pts[i].x = u; else s.pts[i].y = u; });
+    if (h.kind === 'wt') s.h = Math.max(0.05, v - s.z0);
+    else { const top = s.z0 + s.h; s.z0 = Math.min(v, top - 0.05); s.h = top - s.z0; }
+    return;
+  }
   if (s.type === 'poly') { h.idxs.forEach((i) => setUV(s.pts[i], S.view, u, v)); return; }
   const ang = () => Math.atan2(v - s.c.y, u - s.c.x) * 180 / Math.PI, rad = () => Math.hypot(u - s.c.x, v - s.c.y);
   switch (h.kind) {
@@ -931,14 +1043,14 @@ cv.addEventListener('pointerdown', (e) => {
     if (h) {
       const s = S.shapes.find((q) => q.id === S.sel);
       if (e.altKey && h.kind === 'v') {
-        if (s.pts.length - h.idxs.length >= 3) { pushUndo(); s.pts = s.pts.filter((_, i) => !h.idxs.includes(i)); s.kind = 'poly'; changed(); }
+        if (s.pts.length - h.idxs.length >= (s.type === 'wall' && !s.closed ? 2 : 3)) { pushUndo(); s.pts = s.pts.filter((_, i) => !h.idxs.includes(i)); s.kind = 'poly'; changed(); }
         else toast('Ein Polygon braucht mindestens drei Punkte.', true);
         drag = null; return;
       }
       pushUndo();
       if (h.kind === 'mid') {
         const a = s.pts[h.i], b = s.pts[(h.i + 1) % s.pts.length];
-        s.pts.splice(h.i + 1, 0, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 });
+        s.pts.splice(h.i + 1, 0, s.type === 'wall' ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 });
         s.kind = 'poly';
         drag = { mode: 'handle', s, h: { kind: 'v', idxs: [h.i + 1], u: h.u, v: h.v } };
       } else drag = { mode: 'handle', s, h };
@@ -1020,11 +1132,11 @@ cv.addEventListener('pointerup', (e) => {
   press = null; drag = null;
   render();
 });
-cv.addEventListener('dblclick', () => { if (draft && draft.tool === 'poly' && draft.pts.length >= 3) { finishPoly(); render(); } });
+cv.addEventListener('dblclick', () => { if (draft && LINE_TOOLS.includes(draft.tool) && draft.pts.length >= minPts(draft.tool)) { finishPoly(); render(); } });
 cv.addEventListener('pointerleave', () => { if (!press) { hover = null; snapHit = null; render(); } });
 
 /* ---------- Tastatur ---------- */
-const TOOLKEY = { v: 'select', r: 'rect', t: 'rrect', p: 'poly', c: 'circle', a: 'ring', k: 'scale', n: 'origin', l: 'align', m: 'measure' };
+const TOOLKEY = { w: 'wall', o: 'room', v: 'select', r: 'rect', t: 'rrect', p: 'poly', c: 'circle', a: 'ring', k: 'scale', n: 'origin', l: 'align', m: 'measure' };
 window.addEventListener('keydown', (e) => {
   const tag = e.target.tagName, typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
   if (e.key === 'Alt') snapDisabled = true;
@@ -1038,12 +1150,14 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (typing || document.querySelector('dialog[open]')) return;
+  if (draft && draft.pts.length && TYPED_TOOLS.includes(draft.tool) && /^[0-9.,xX*]$/.test(e.key)) { draftNum += e.key; e.preventDefault(); render(); return; }
   if (e.code === 'Space') { spaceDown = true; cv.style.cursor = 'grab'; e.preventDefault(); return; }
-  if (e.key === 'Escape') { if (draft) draft = null; else { setTool('select'); S.sel = null; measure = null; renderPanels(); } render(); return; }
-  if (e.key === 'Enter') { if (draft && draft.tool === 'poly') { finishPoly(); render(); } return; }
+  if (e.key === 'Escape') { if (draftNum) draftNum = ''; else if (draft) draft = null; else { setTool('select'); S.sel = null; measure = null; renderPanels(); } render(); return; }
+  if (e.key === 'Enter') { if (draftNum) applyTyped(); else if (draft && LINE_TOOLS.includes(draft.tool)) finishPoly(); render(); return; }
   if (e.key === 'Backspace' || e.key === 'Delete') {
     e.preventDefault();
-    if (draft && draft.pts.length > 0) { draft.pts.pop(); if (!draft.pts.length) draft = null; render(); }
+    if (draftNum) { draftNum = draftNum.slice(0, -1); render(); }
+    else if (draft && draft.pts.length > 0) { draft.pts.pop(); if (!draft.pts.length) draft = null; render(); }
     else deleteSel();
     return;
   }
@@ -1206,10 +1320,11 @@ $('btnFit').onclick = fit;
 $('btnUndo').onclick = undo;
 $('btnRedo').onclick = redo;
 $('exportRot').onchange = refreshExport;
+$('exportMode').onchange = refreshExport;
 $('exportGo').onclick = () => {
   let name = $('exportName').value.trim() || 'venue_soundvision.txt';
   if (!/\.txt$/i.test(name)) name += '.txt';
-  download(name, exportText(Number($('exportRot').value)))
+  download(name, exportText(Number($('exportRot').value), $('exportMode').value))
     .then(() => toast('Datei gespeichert: ' + name))
     .catch((err) => toast('Nicht gespeichert: ' + (err.message || err.code || 'abgebrochen'), true));
 };
@@ -1224,6 +1339,10 @@ $('planeValue').onchange = (e) => {
   const v = num(e.target.value); if (v === null) return renderPlanPanel();
   if (S.view === 'top') S.drawZ = v; else if (S.view === 'side') S.sliceY = v; else S.sliceX = v;
   e.target.value = inputNum(v);
+};
+$('wallH').onchange = (e) => {
+  const v = num(e.target.value); if (v === null || v <= 0) return renderPlanPanel();
+  S.wallH = v; e.target.value = inputNum(v);
 };
 $('bgSelect').onchange = async (e) => {
   const val = e.target.value; pushUndo();
@@ -1248,7 +1367,13 @@ $('btnRotL').onclick = () => rotateBg(-90);
 $('btnRotR').onclick = () => rotateBg(90);
 $('btnFlip').onclick = () => { pushUndo(); S.views[S.view].flip = !S.views[S.view].flip; invalidateCrisp(); scheduleCrisp(); changed(); };
 $('props').addEventListener('change', (e) => applyPropChange(e.target));
-$('props').addEventListener('click', (e) => { if (e.target.id === 'propDup') duplicateSel(); if (e.target.id === 'propDel') deleteSel(); });
+$('props').addEventListener('click', (e) => { if (e.target.id === 'propWalls') {
+    const s = S.shapes.find((x) => x.id === S.sel); if (!s) return;
+    const lp = tess(s).loops[0], z0 = Math.min(...lp.map((p) => p.z));
+    addShape(newWall(lp.map((p) => [p.x, p.y]), true, z0));
+    toast('Wände erzeugt. Die Fläche selbst ist unverändert.');
+  }
+  if (e.target.id === 'propDup') duplicateSel(); if (e.target.id === 'propDel') deleteSel(); });
 $('shapes').addEventListener('click', (e) => {
   const li = e.target.closest('li[data-id]'); if (!li) return;
   const id = +li.dataset.id, s = S.shapes.find((x) => x.id === id), act = e.target.dataset.act;
@@ -1271,5 +1396,5 @@ loadPdfjs().catch((e) => toast(e.message, true));
 tryRestore();
 
 /* Für automatisierte Tests */
-window.CAD2SV = { S, cams, setView, setTool, addPdf, assignBg, importPdf, exportText, exportTriangles, tess, plan2uv, uv2screen, fit, ap, inv, resetAll, planEntry };
+window.CAD2SV = { S, cams, setView, setTool, addPdf, assignBg, importPdf, exportText, exportTriangles, exportFaces, faces, tess, plan2uv, uv2screen, fit, ap, inv, resetAll, planEntry };
 })();

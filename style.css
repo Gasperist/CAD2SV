@@ -59,11 +59,12 @@ input[type=checkbox] { accent-color: var(--accent); margin: 0 5px 0 0; }
 .tools button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .tools svg { width: 20px; height: 20px; fill: currentColor; flex: none; }
 .tools svg .o { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; }
+@media (max-height: 760px) { .tools button { padding: 2px 0; font-size: 10px; } .tools svg { width: 17px; height: 17px; } .tools .sep { margin-top: 4px; } }
 .tools .sep { font-size: 10px; color: #8a929d; text-align: center; margin-top: 8px; text-transform: uppercase; letter-spacing: .05em; }
 
 .stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .viewbar {
-  display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 10px;
   background: var(--bg2); border-bottom: 1px solid var(--line);
 }
 .tabs { display: flex; gap: 2px; background: var(--bg); padding: 2px; border-radius: 6px; }

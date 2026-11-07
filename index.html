@@ -29,6 +29,9 @@
     <button data-tool="poly" title="Polygon: Punkte klicken, Enter schließt (P)"><svg viewBox="0 0 24 24"><path d="M4 9l8-6 8 7-3 10H8z" class="o"/></svg><span>Polygon</span></button>
     <button data-tool="circle" title="Kreis: Mittelpunkt, dann Radius (C)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" class="o"/></svg><span>Kreis</span></button>
     <button data-tool="ring" title="Bogen: Mitte, Anfang, Ende, Innenradius (A)"><svg viewBox="0 0 24 24"><path d="M3 15a9.500 9.500 0 0 1 18 0l-5 1.500a4.500 4.500 0 0 0-8 0z" class="o"/></svg><span>Bogen</span></button>
+    <div class="sep">Gebäude</div>
+    <button data-tool="wall" title="Wand: entlang der Wand klicken, Enter beendet (W)"><svg viewBox="0 0 24 24"><path d="M4 20V8l8-4v12zM12 16l8 4V8l-8-4" class="o"/></svg><span>Wand</span></button>
+    <button data-tool="room" title="Raum: Umriss klicken, erzeugt Boden und Wände (O)"><svg viewBox="0 0 24 24"><path d="M3 9l9-5 9 5v10H3z" class="o"/><path d="M3 9l9 4 9-4M12 13v6" class="o"/></svg><span>Raum</span></button>
     <div class="sep">Plan</div>
     <button data-tool="scale" title="Skalieren: Strecke klicken, Länge eingeben (K)"><svg viewBox="0 0 24 24"><path d="M3 16l13-13 5 5L8 21z" class="o"/><path d="M8 11l2 2M11 8l2 2M14 5l2 2" class="o"/></svg><span>Skalieren</span></button>
     <button data-tool="origin" title="Nullpunkt setzen (N)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.500" class="o"/><path d="M12 2v20M2 12h20" class="o"/></svg><span>Nullpunkt</span></button>
@@ -45,6 +48,7 @@
         <button data-view="iso" title="Taste 4">3D</button>
       </div>
       <label class="field" id="planeField"><span id="planeLabel">Zeichenhöhe Z</span><input id="planeValue" value="0" inputmode="decimal"><i>m</i></label>
+      <label class="field" id="wallField" title="Gilt nur für Wände, nicht für Flächen"><span>Wandhöhe</span><input id="wallH" value="3" inputmode="decimal"><i>m</i></label>
       <div class="spacer"></div>
       <label class="check" title="An Planlinien, Eckpunkte und den Nullpunkt fangen (S)"><input type="checkbox" id="optSnap" checked>Fangen</label>
       <label class="check" title="Zusätzlich auf das Raster fangen (G)"><input type="checkbox" id="optGridSnap">Raster 0,5 m</label>
@@ -119,6 +123,9 @@
     <label class="row"><span>Dateiname</span><input id="exportName"></label>
     <label class="row"><span>Drehung um Z</span>
       <select id="exportRot"><option value="0">0° (wie gezeichnet)</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select>
+    </label>
+    <label class="row"><span>Flächen</span>
+      <select id="exportMode"><option value="whole">Als ganze Flächen</option><option value="tri">Als Dreiecke (Rückfallebene)</option></select>
     </label>
     <p class="note" id="exportSummary"></p>
     <details><summary>Dateiinhalt ansehen</summary><pre id="exportPreview"></pre></details>

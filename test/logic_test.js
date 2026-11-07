@@ -36,4 +36,27 @@ print(A.exportText());
 ok(/\n"; LengthUnit", "m"\n";"\n"Label","Audience"\n0\.123,-2\.5,1\n3,0,1\n3,4,1\n";"\n$/.test(A.exportText()),'Dateiformat wie Referenz-Exporter, Dezimalpunkt');
 // Ausgeblendet
 S.shapes[0].visible=false; ok(A.exportTriangles().length===0,'Ausgeblendete Flächen fehlen im Export');
+// --- Feedback: ganze Flächen und Wände
+const E=(sh)=>{S.shapes.length=0;S.shapes.push(Object.assign({id:1,label:'Audience',visible:true,flip:false},sh));return A.exportFaces()};
+const nzv=(f)=>{let n=0;f.v.forEach((p,i)=>{const q=f.v[(i+1)%f.v.length];n+=(p.x-q.x)*(p.y+q.y)});return n};
+const rectP=[{x:0,y:0,z:0},{x:10,y:0,z:0},{x:10,y:5,z:0},{x:0,y:5,z:0}];
+let f=E({type:'poly',kind:'rect',pts:rectP}); ok(f.length===1&&f[0].v.length===4,'Rechteck = ein Block mit 4 Ecken');ok(nzv(f[0])>0,'Rechteck gegen den Uhrzeigersinn von oben');
+f=E({type:'poly',kind:'rect',pts:rectP.slice().reverse()}); ok(f.length===1&&nzv(f[0])>0,'CW gezeichnet wird gedreht');
+f=E({type:'poly',kind:'rect',pts:[{x:0,y:0,z:0},{x:10,y:0,z:0},{x:10,y:5,z:3},{x:0,y:5,z:3}]}); ok(f.length===1,'Tribüne (eben) = ein Block');
+f=E({type:'poly',kind:'rect',pts:[{x:0,y:0,z:0},{x:10,y:0,z:0},{x:10,y:5,z:3},{x:0,y:5,z:0}]}); ok(f.length===2,'Verwundene Fläche wird in Dreiecke geteilt');
+f=E({type:'poly',kind:'poly',pts:[{x:0,y:0,z:1},{x:4,y:0,z:1},{x:4,y:2,z:1},{x:2,y:2,z:1},{x:2,y:4,z:1},{x:0,y:4,z:1}]}); ok(f.length===1&&f[0].v.length===6,'L-Polygon = ein Block mit 6 Ecken');
+const R={type:'round',c:{x:0,y:0},r:10,ri:0,a0:0,a1:360,z:0,zo:0,seg:48};
+f=E(R); ok(f.length===1&&f[0].v.length===48,'Kreis = ein Block');
+f=E(Object.assign({},R,{ri:5})); ok(f.length===48&&f[0].v.length===4,'Ring mit Loch = Vierecke');
+f=E(Object.assign({},R,{ri:5,a1:90})); ok(f.length===1,'Flacher Bogen = ein Block');
+f=E(Object.assign({},R,{ri:5,a1:90,zo:3})); ok(f.length>1&&f.every(x=>x.v.length===4),'Geneigter Bogen = Vierecke');ok(f.every(x=>nzv(x)>0),'Geneigter Bogen zeigt nach oben');
+const W={type:'wall',closed:true,z0:0,h:3,pts:[{x:0,y:0},{x:10,y:0},{x:10,y:5},{x:0,y:5}]};
+f=E(W); ok(f.length===4&&f.every(x=>x.v.length===4),'Raum: 4 Wände mit je 4 Ecken');
+ok(f.every(x=>Math.min(...x.v.map(p=>p.z))===0&&Math.max(...x.v.map(p=>p.z))===3),'Wand reicht von 0 bis Wandhöhe');
+const nrm=(x)=>{let n=[0,0];x.v.forEach((p,i)=>{const q=x.v[(i+1)%4];n[0]+=(p.y-q.y)*(p.z+q.z);n[1]+=(p.z-q.z)*(p.x+q.x)});return n};
+const inw=f.every(x=>{const c=[x.v.reduce((s,p)=>s+p.x,0)/4,x.v.reduce((s,p)=>s+p.y,0)/4],n=nrm(x);return (5-c[0])*n[0]+(2.5-c[1])*n[1]>0});ok(inw,'Wände zeigen in den Raum');
+f=E(Object.assign({},W,{pts:W.pts.slice().reverse()}));const inw2=f.every(x=>{const c=[x.v.reduce((s,p)=>s+p.x,0)/4,x.v.reduce((s,p)=>s+p.y,0)/4],n=nrm(x);return (5-c[0])*n[0]+(2.5-c[1])*n[1]>0});ok(inw2,'Auch andersherum gezeichnet nach innen');
+f=E(Object.assign({},W,{closed:false})); ok(f.length===3,'Offene Wand: 3 Segmente');
+S.shapes[0].label='Non-audience'; ok(A.exportText().includes('"Label","Non_audience"'),'Bindestrich im Label ersetzt');
+ok(/"Label","Non_audience"\n10,0,0\n/.test(A.exportText())||A.exportText().includes('10,0,3'),'Wand im Dateitext');
 print(fails? fails+' FEHLER':'ALLE TESTS OK');
