@@ -1,0 +1,22 @@
+# Baut bei jedem Tag wie v1.2 die Einzeldatei und veröffentlicht sie als Release.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Einzeldatei bauen
+        run: python3 build_single.py
+      - name: Release veröffentlichen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/CAD2SV.html --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
